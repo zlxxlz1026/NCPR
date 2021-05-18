@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Chat Room</title>
+    <link rel="stylesheet" href="https://cdn.staticfile.org/font-awesome/4.7.0/css/font-awesome.css">
+    <link href="/static/css/bootstrap4.1.0.min.css" rel="stylesheet">
+    <link href="/static/css/index.css" rel="stylesheet">
+    <script src="/static/js/bootstrap4.1.0.min.js"></script>
+    <script src="/static/js/jquery-3.2.1.min.js"></script>
+</head>
+
+<body>
+<div class="text-center shadow bg-white rounded box">
+    <h1 class="box-title">Welcome to RecommendBot</h1>
+    <div class="row box-form">
+        <form class="form-inline" action="/chatRoom">
+            <div class="input-group" style="margin:0 auto;">
+                <div class="input-group-prepend">
+                    <span class="input-group-text">
+                        <i class="fa fa-user"></i>
+                    </span>
+                </div>
+                <input type="text" class="form-control" name="name" placeholder="input your name">
+                <div class="input-group-append">
+                    <button class="btn btn-outline-secondary" type="submit">Go</button>
+                </div>
+            </div>
+        </form>
+    </div>
+    <p class="text-muted box-footer">@<a href="https://github.com/zlxxlz1026">zlxxlz</a></p>
+</div>
+</body>
+</html>

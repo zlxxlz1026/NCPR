@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Chat Room</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <link href="/static/css/bootstrap4.1.0.min.css" rel="stylesheet">
+    <link href="/static/css/chatRoom.css" rel="stylesheet">
+    <script src="/static/js/bootstrap4.1.0.min.js"></script>
+    <script src="/static/js/jquery-3.2.1.min.js"></script>
+    <script src="/static/js/chatRoom.js"></script>
+</head>
+<body>
+    <header class="fixed-top shadow-sm header row" style="background-color: #f5f5f5;">
+        <div class="col-2">
+            <a href="/" class="btn btn-outline-secondary text-dark" role="button">
+                <strong>Back</strong>
+            </a>
+        </div>
+        <div class="col-8 title">
+            <strong class="text-dark">RecommendBot</strong>
+        </div>
+        <div class="col-2"></div>
+    </header>
+    <!-- header end -->
+
+    <ul id="messageArea"></ul>
+    <!-- message area end -->
+    
+    <div class="fixed-bottom input-footer">
+        <div class="username">
+            <span id="name">{{.name}}</span>
+        </div>
+        <div class="input">
+            <input class="form-control" id="inputArea" type="text" placeholder="Type your message..."/>
+        </div>
+        <button id="sendBtn" class="btn btn-primary button">Send</button>
+    </div>
+    <!-- inputMessage Area end -->
+</body>
+</html>
