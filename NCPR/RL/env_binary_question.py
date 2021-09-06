@@ -1,4 +1,3 @@
-
 import json
 import numpy as np
 import os
@@ -7,8 +6,11 @@ from utils import *
 import itertools
 from tkinter import _flatten
 from collections import Counter
+import time
+
+
 class BinaryRecommendEnv(object):
-    def __init__(self, kg, dataset, data_name, seed=1, max_turn=15, cand_len_size=20, attr_num=20, mode='train', command=1, ask_num=1, entropy_way='weight entropy', fm_epoch=250):
+    def __init__(self, kg, dataset, data_name, seed=1, max_turn=15, cand_len_size=20, attr_num=20, mode='train', command=1, ask_num=1, entropy_way='weight entropy', fm_epoch=250, method='none', hyper=0.3, update=False):
         self.data_name = data_name
         self.command = command
         self.mode = mode
@@ -27,11 +29,14 @@ class BinaryRecommendEnv(object):
         self.rec_num = 10
         #  entropy  or weight entropy
         self.ent_way = entropy_way
+        self.method = method
+        self.hyper = hyper
 
         # user's profile
         self.reachable_feature = []   # user reachable feature
         self.user_acc_feature = []  # user accepted feature which asked by agent
         self.user_rej_feature = []  # user rejected feature which asked by agent
+        self.user_rej_items = []
         self.cand_items = []   # candidate items
 
         #user_id  item_id   cur_step   cur_node_set
@@ -53,7 +58,7 @@ class BinaryRecommendEnv(object):
         set_random_seed(self.seed) # set random seed
         if mode == 'train':
             self.__user_dict_init__() # init self.user_weight_dict  and  self.user_items_dict
-        elif mode == 'test':
+        elif mode == 'test' or mode == 'valid':
             self.ui_array = None    # u-i array [ [userID1, itemID1], ...,[userID2, itemID2]]
             self.__test_tuple_generate__()
             self.test_num = 0
@@ -97,17 +102,70 @@ class BinaryRecommendEnv(object):
             'until_T': 0
         }
         self.attr_count_dict = dict()   # This dict is used to calculate entropy
+        self.feature_matrix = self._calu_similarity_matriax()
         # self.feature_similarity_dict = load_feature_similarity_dict('LAST_FM')
+        self.update = update
+        self.__init_index__()
+        self.eps = 1e-9
+        self.timer = 0.0
+
+    def __init_index__(self):
+        self.user_index = [i for i in range(self.user_length)]
+        self.item_index = [i for i in range(self.item_length)]
+        self.attribute_index = [i for i in range(self.feature_length)]
+        self.user_graph_index = [i for i in range(self.user_length)]
+        self.item_graph_index = np.array([i for i in range(self.user_length, self.user_length + self.item_length)])
+        self.attribute_graph_index = [i for i in range(self.user_length + self.item_length, self.user_length + self.item_length + self.feature_length)]
+
+
+    def __update_user_embedding__(self):
+        start = time.time()
+        e_u = torch.tensor(self.ui_embeds[self.user_id])
+        if len(self.user_acc_feature) == 0:
+            e_pa = 0
+        else:
+            # pos_att_list = torch.tensor(self.user_acc_feature)
+            pos_att_embed = self.feature_emb[self.user_acc_feature]
+            # pos_att_embed = torch.tensor(pos_att_embed)
+            # pos_att_cnt = torch.tensor([len(self.user_acc_feature)])
+            # e_pa = torch.sum(pos_att_embed, dim=-2) / pos_att_cnt
+            e_pa = np.around(np.sum(pos_att_embed, axis=-2), 4) / (len(self.user_acc_feature) + self.eps)
+        if len(self.user_rej_feature) == 0:
+            e_na = 0
+        else:
+            neg_att_embed = self.feature_emb[self.user_rej_feature]
+            # neg_att_embed = torch.tensor(neg_att_embed)
+            # neg_att_cnt = torch.tensor([len(self.user_rej_feature)])
+            # e_na = torch.sum(neg_att_embed, dim=-2) / neg_att_cnt
+            e_na = np.around(np.sum(neg_att_embed, axis=-2), 4) / (len(self.user_rej_feature) + self.eps)
+        if len(self.user_rej_items) == 0:
+            e_ni = 0
+        else:
+            neg_item_embed = self.ui_embeds[self.item_graph_index[self.user_rej_items]]
+            # neg_item_embed = torch.tensor(neg_item_embed)
+            # neg_item_cnt = torch.tensor([len(self.user_rej_items)])
+            # e_ni = torch.sum(neg_item_embed, dim=-2) / neg_item_cnt
+            e_ni = np.around(np.sum(neg_item_embed, axis=-2), 4) / (len(self.user_rej_items) + self.eps)
+        self.user_embed = e_u + e_pa - e_na - e_ni
+        self.timer += time.time() - start
+
+    def get_timer(self):
+        return self.timer
+
 
     def __load_rl_data__(self, data_name, mode):
         if mode == 'train':
             with open(os.path.join(DATA_DIR[data_name], 'UI_Interaction_data/review_dict_train.json'), encoding='utf-8') as f:
-                print('train_data: load RL valid data')
+                print('train_data: load RL train data')
                 mydict = json.load(f)
                 # print(mydict)
         elif mode == 'test':
             with open(os.path.join(DATA_DIR[data_name], 'UI_Interaction_data/review_dict_test.json'), encoding='utf-8') as f:
                 print('test_data: load RL test data')
+                mydict = json.load(f)
+        elif mode == 'valid':
+            with open(os.path.join(DATA_DIR[data_name], 'UI_Interaction_data/review_dict_valid.json'), encoding='utf-8') as f:
+                print('valid_data: load RL valid data')
                 mydict = json.load(f)
         return mydict
 
@@ -141,7 +199,7 @@ class BinaryRecommendEnv(object):
             # self.user_id = np.random.choice(users, p=list(self.user_weight_dict.values())) # select user  according to user weights
             self.user_id = np.random.choice(users)
             self.target_item = np.random.choice(self.ui_dict[str(self.user_id)])
-        elif self.mode == 'test':
+        elif self.mode == 'test' or self.mode == 'valid':
             self.user_id = self.ui_array[self.test_num, 0]
             self.target_item = self.ui_array[self.test_num, 1]
             self.test_num += 1
@@ -152,6 +210,7 @@ class BinaryRecommendEnv(object):
         self.reachable_feature = []  # user reachable feature in cur_step
         self.user_acc_feature = []  # user accepted feature which asked by agent
         self.user_rej_feature = []  # user rejected feature which asked by agent
+        self.user_rej_items = []
         self.cand_items = list(range(self.item_length))
 
         # init  state vector
@@ -255,6 +314,8 @@ class BinaryRecommendEnv(object):
 
         elif action == 1:  #recommend items
             #select topk candidate items to recommend
+            if self.update:
+                self.__update_user_embedding__()
             cand_item_score = self._item_score()
             item_score_tuple = list(zip(self.cand_items, cand_item_score))
             sort_tuple = sorted(item_score_tuple, key=lambda x: x[1], reverse=True)
@@ -393,6 +454,7 @@ class BinaryRecommendEnv(object):
             self.conver_his[self.cur_conver_step] = self.history_dict['rec_scu'] #update state vector: conver_his
             done = 1
         else:
+            self.user_rej_items.extend(recom_items)
             reward = self.reward_dict['rec_fail']
             self.conver_his[self.cur_conver_step] = self.history_dict['rec_fail']  #update state vector: conver_his
             if len(self.cand_items) > self.rec_num:
@@ -450,28 +512,73 @@ class BinaryRecommendEnv(object):
         s = 1 / (1 + np.exp(-x_np))
         return s.tolist()
 
-    def _calu_feature_similarity(self, rej_feature):
-        #根据余旋距离计算相似度
-        score_array = np.zeros((len(rej_feature), self.feature_length), dtype=np.float)
-        cnt = 0
-        for i in rej_feature:
+    def _calu_similarity_matriax(self):
+        score_array = np.zeros((self.feature_length, self.feature_length), dtype=np.float)
+        tmp_dict = {}
+        for i in range(self.feature_length):
+            tmp_dict[i] = []
             for j in range(self.feature_length):
-                emb_i = self.feature_emb[i, :]
-                emb_j = self.feature_emb[j, :]
-                score_array[cnt][j] = np.inner(emb_i, emb_j) / (np.sqrt(np.sum(emb_i**2)*np.sum(emb_j**2)))
-                if score_array[cnt][j] > 0.2:
-                    if j not in self.user_rej_feature:
-                        # print("hhh")
-                        self.user_rej_feature.append(j)
-            cnt += 1
-        print(score_array)
+                item_list_i = self.kg.G['feature'][i]['belong_to']
+                item_list_j = self.kg.G['feature'][j]['belong_to']
+                inter = set(item_list_i) & set(item_list_j)
+                score_array[i][j] = len(inter) / (len(item_list_j) + len(item_list_i) - len(inter))
+                if score_array[i][j] > self.hyper:
+                    tmp_dict[i].append(j)
+        return tmp_dict
 
-        # score_array = np.zeros((self.feature_length, self.feature_length), dtype=np.float)
-        # for i in range(self.feature_length):
-        #     for j in range(self.feature_length):
-        #         score_array[i][j] = np.inner(self.feature_emb[i, :], self.feature_emb[j, :])
-        # print(f'score_array : {score_array}')
-        # return score_array
+    def _calu_feature_similarity(self, rej_feature):
+        if self.method == 'jaccard':
+            if len(rej_feature) > 0:
+                tmp_set = set(self.feature_matrix[rej_feature[0]])
+                self.user_rej_feature = list(set(self.user_rej_feature).union(tmp_set))
+        else:
+            return
+
+    # def _calu_feature_similarity(self, rej_feature):
+    # #     #根据余旋距离计算相似度
+    #     score_array = np.zeros((len(rej_feature), self.feature_length), dtype=np.float)
+    #     cnt = 0
+    #     if self.method == 'cos':
+    #         for i in rej_feature:
+    #             for j in range(self.feature_length):
+    #                 emb_i = self.feature_emb[i, :]
+    #                 emb_j = self.feature_emb[j, :]
+    #                 score_array[cnt][j] = np.inner(emb_i, emb_j) / (np.sqrt(np.sum(emb_i**2)*np.sum(emb_j**2)))
+    #                 if score_array[cnt][j] > self.hyper:
+    #                     if j not in self.user_rej_feature:
+    #                         # print("hhh")
+    #                         self.user_rej_feature.append(j)
+    #     elif self.method == 'jaccard':
+    #     # jaccard相似度
+    #         for i in rej_feature:
+    #             for j in range(self.feature_length):
+    #                 item_list_i = self.kg.G['feature'][i]['belong_to']
+    #                 item_list_j = self.kg.G['feature'][j]['belong_to']
+    #                 inter = set(item_list_i) & set(item_list_j)
+    #                 score_array[cnt][j] = len(inter) / (len(item_list_j) + len(item_list_i) - len(inter))
+    #                 if score_array[cnt][j] > self.hyper:
+    #                     if j not in self.user_rej_feature:
+    #                         # print("jjjjj")
+    #                         self.user_rej_feature.append(j)
+    #     elif self.method == 'pearson':
+    #     # pearson相似度
+    #         for i in rej_feature:
+    #             for j in range(self.feature_length):
+    #                 emb_i = self.feature_emb[i, :]
+    #                 mean_emb_i = np.mean(emb_i)
+    #                 tmp_i = emb_i - mean_emb_i
+    #                 emb_j = self.feature_emb[j, :]
+    #                 mean_emb_j = np.mean(emb_j)
+    #                 tmp_j = emb_j - mean_emb_j
+    #                 score_array[cnt][j] = np.inner(tmp_i, tmp_j) / (np.sqrt(np.sum(tmp_i**2)*np.sum(tmp_j**2)))
+    #                 if score_array[cnt][j] > self.hyper:
+    #                     # print("kkkkkkkkkk")
+    #                     if j not in self.user_rej_feature:
+    #                         self.user_rej_feature.append(j)
+    #     else:
+    #         print('trainnnnnnnnnnnnnnnn')
+    #     cnt += 1
+    #     print(score_array)
 
     # def _update_cand_feature(self, rej_feature):
     #     x = []
@@ -483,15 +590,3 @@ class BinaryRecommendEnv(object):
     #                 self.user_rej_feature.append(j)
     #     print(x)
 
-
-
-
-if __name__ == '__main__':
-    # x = [24 >> d & 1 for d in range(20)][::-1]
-    # print(x)
-    # x = np.ones((1, 5), dtype=np.float)
-    x = np.array([[1, 2, 3]])
-    y = np.array([[2,3,4]])
-    print((np.sum(x**2)*np.sum(x**2))**0.5)
-    print(np.inner(x, y))
-    # print(Counter(list(_flatten(x))))

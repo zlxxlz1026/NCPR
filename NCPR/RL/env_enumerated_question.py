@@ -9,11 +9,13 @@ from utils import *
 from tkinter import _flatten
 from collections import Counter
 class EnumeratedRecommendEnv(object):
-    def __init__(self, kg, dataset, data_name, seed=1, max_turn=15, cand_len_size=20, attr_num=20, mode='train', command=6, ask_num=1, entropy_way='weight entropy', fm_epoch=0):
+    def __init__(self, kg, dataset, data_name, seed=1, max_turn=15, cand_len_size=20, attr_num=20, mode='train', command=6, ask_num=1, entropy_way='weight entropy', fm_epoch=0, method='none', hyper=0.3):
         self.data_name = data_name
         self.command = command
         self.mode = mode
         self.seed = seed
+        self.method = method
+        self.hyper = hyper
         self.max_turn = max_turn    #MAX_TURN
         self.attr_state_num = attr_num
         self.cand_len_size = cand_len_size
@@ -68,6 +70,7 @@ class EnumeratedRecommendEnv(object):
         #load fm epoch
         embeds = load_embed(data_name, epoch=fm_epoch)
         self.ui_embeds =embeds['ui_emb']
+        print(type(self.ui_embeds))
         self.feature_emb = embeds['feature_emb']
         # self.feature_length = self.feature_emb.shape[0]-1
 
@@ -101,11 +104,17 @@ class EnumeratedRecommendEnv(object):
             'until_T': 0
         }
         self.attr_count_dict = dict()   # This dict is used to calculate entropy
+        self.large_embed = np.zeros((self.feature_length, 64), dtype=np.float)
+        with open('./tmp/yelp/matrix.json', 'r', encoding='utf8') as f:
+            self.feature_matrix = json.load(f)
+        # self.feature_matrix = self._calu_similarity_matriax()
+        # self._calu_large_embed()
+
 
     def __load_rl_data__(self, data_name, mode):
         if mode == 'train':
-            with open(os.path.join(DATA_DIR[data_name], 'UI_Interaction_data/review_dict_valid.json'), encoding='utf-8') as f:
-                print('train_data: load RL valid data')
+            with open(os.path.join(DATA_DIR[data_name], 'UI_Interaction_data/review_dict_train.json'), encoding='utf-8') as f:
+                print('train_data: load RL train data')
                 mydict = json.load(f)
         elif mode == 'test':
             with open(os.path.join(DATA_DIR[data_name], 'UI_Interaction_data/review_dict_test.json'), encoding='utf-8') as f:
@@ -130,7 +139,6 @@ class EnumeratedRecommendEnv(object):
                 ui_list.append([user_id, item_id])
         self.ui_array = np.array(ui_list)
         np.random.shuffle(self.ui_array)
-
 
 
     def reset(self):
@@ -227,6 +235,7 @@ class EnumeratedRecommendEnv(object):
         elif action == 0:   #ask large_feature
             print('-->action: ask features')
             reward, done, acc_feature, rej_feature = self._ask_update()  #update user's profile:  user_acc_feature & user_rej_feature & cand_items
+            self._calu_feature_similarity(rej_feature)
             self._update_cand_items(acc_feature, rej_feature)  # update cand_item
 
             if len(acc_feature):   # can reach new large_feature：  update current node and reachable_feature
@@ -330,7 +339,6 @@ class EnumeratedRecommendEnv(object):
         done = 0
 
         feature_groundtrue = self.kg.G['item'][self.target_item]['belong_to_large']
-
         remove_acced_reachable_fea = self.reachable_feature.copy()   # copy reachable_feature
 
         acc_feature = list(set(remove_acced_reachable_fea[:self.ask_num]) & set(feature_groundtrue))
@@ -450,6 +458,92 @@ class EnumeratedRecommendEnv(object):
         x_np = np.array(x_list)
         s = 1 / (1 + np.exp(-x_np))
         return s.tolist()
+
+    def _calu_large_embed(self):
+        for i in range(self.attr_state_num):
+            small_ids = self.kg.G['large_feature'][i]['link_to_feature']
+            small_embed = np.sum(self.feature_emb[small_ids, :], axis=0)
+            self.large_embed[i] = small_embed
+        # print(self.large_embed)
+
+    def _calu_similarity_matriax(self):
+        score_array = np.zeros((self.feature_length, self.feature_length), dtype=np.float)
+        tmp_dict = {}
+        for i in range(self.feature_length):
+            tmp_dict[i] = []
+            for j in range(self.feature_length):
+                item_list_i = self.kg.G['large_feature'][i]['belong_to_large']
+                item_list_j = self.kg.G['large_feature'][j]['belong_to_large']
+                inter = set(item_list_i) & set(item_list_j)
+                score_array[i][j] = len(inter) / (len(item_list_j) + len(item_list_i) - len(inter))
+                if score_array[i][j] > self.hyper:
+                    tmp_dict[i].append(j)
+        json_dict = json.dumps(tmp_dict)
+        with open('./tmp/yelp/matrix.json', 'w', encoding='utf8') as f:
+            f.write(json_dict)
+        print('done!!!!')
+        return tmp_dict
+
+    def _calu_feature_similarity(self, rej_feature):
+        if self.method == 'jaccard':
+            if len(rej_feature) > 0:
+                #这里每次只询问一个属性0和-1没区别
+                tmp_set = set(self.feature_matrix[str(rej_feature[0])])
+                self.user_rej_feature = list(set(self.user_rej_feature).union(tmp_set))
+        else:
+            return
+
+
+    # def _calu_feature_similarity(self, rej_feature):
+    #     score_array = np.zeros((len(rej_feature), self.feature_length), dtype=np.float)
+    #     cnt = 0
+    #     # cos
+    #     if self.method == 'cos':
+    #         for i in rej_feature:
+    #             for j in range(self.feature_length):
+    #                 emb_i = self.large_embed[i, :]
+    #                 emb_j = self.large_embed[j, :]
+    #                 score_array[cnt][j] = np.inner(emb_i, emb_j) / (np.sqrt(np.sum(emb_i ** 2) * np.sum(emb_j ** 2)))
+    #                 if score_array[cnt][j] > self.hyper:
+    #                     if j not in self.user_rej_feature:
+    #                         print("hhhhhhhhhhhhhhhhhhh")
+    #                         self.user_rej_feature.append(j)
+    #     elif self.method == 'jaccard':
+    #     # jaccard相似度
+    #         for i in rej_feature:
+    #             for j in range(self.feature_length):
+    #                 item_list_i = self.kg.G['large_feature'][i]['belong_to_large']
+    #                 item_list_j = self.kg.G['large_feature'][j]['belong_to_large']
+    #                 inter = set(item_list_i) & set(item_list_j)
+    #                 score_array[cnt][j] = len(inter) / (len(item_list_j) + len(item_list_i) - len(inter))
+    #                 print(score_array[cnt][[j]])
+    #                 if score_array[cnt][j] > self.hyper:
+    #                     if j not in self.user_rej_feature:
+    #                         print("jjjjjjjjjjjj")
+    #                         print(score_array[cnt][j])
+    #                         self.user_rej_feature.append(j)
+    #
+    #     #pearson
+    #     elif self.method == 'pearson':
+    #         for i in rej_feature:
+    #             for j in range(self.feature_length):
+    #                 emb_i = self.large_embed[i, :]
+    #                 mean_emb_i = np.mean(emb_i)
+    #                 tmp_i = emb_i - mean_emb_i
+    #                 emb_j = self.large_embed[j, :]
+    #                 mean_emb_j = np.mean(emb_j)
+    #                 tmp_j = emb_j - mean_emb_j
+    #                 score_array[cnt][j] = np.inner(tmp_i, tmp_j) / (np.sqrt(np.sum(tmp_i**2)*np.sum(tmp_j**2)))
+    #                 if score_array[cnt][j] > self.hyper:
+    #                     if j not in self.user_rej_feature:
+    #                         print("kkkkkkkkkk")
+    #                         print(score_array[cnt][j])
+    #                         self.user_rej_feature.append(j)
+    #     else:
+    #         print("tranditional")
+    #
+    #     cnt += 1
+        # print(score_array)
 
 
 

@@ -18,13 +18,17 @@ from utils import *
 from RL.env_binary_question import BinaryRecommendEnv
 from RL.env_enumerated_question import EnumeratedRecommendEnv
 from RL.RL_evaluate import dqn_evaluate
+# from RL.RL_valid import dqn_valid
 import time
 import warnings
+
 warnings.filterwarnings("ignore")
 EnvDict = {
+    # LAST_FM: LFPANEnv,
     LAST_FM: BinaryRecommendEnv,
     LAST_FM_STAR: BinaryRecommendEnv,
     YELP: EnumeratedRecommendEnv,
+    # YELP: RFAPNEnv,
     YELP_STAR: BinaryRecommendEnv
     }
 FeatureDict = {
@@ -129,10 +133,10 @@ class Agent(object):
         self.optimizer.step()
         return loss.data
     
-    def save_model(self, data_name, filename, epoch_user):
-        save_rl_agent(dataset=data_name, model=self.policy_net, filename=filename, epoch_user=epoch_user)
-    def load_model(self, data_name, filename, epoch_user):
-        model_dict = load_rl_agent(dataset=data_name, filename=filename, epoch_user=epoch_user)
+    def save_model(self, data_name, filename, epoch_user, hyper, method):
+        save_rl_agent(dataset=data_name, model=self.policy_net, filename=filename, epoch_user=epoch_user, hyper=hyper, method = method)
+    def load_model(self, data_name, filename, epoch_user, hyper, method):
+        model_dict = load_rl_agent(dataset=data_name, filename=filename, epoch_user=epoch_user, hyper=hyper, method=method)
         self.policy_net.load_state_dict(model_dict)
 
 
@@ -141,7 +145,7 @@ def train(args, kg, dataset, filename):
 
 
     env = EnvDict[args.data_name](kg, dataset, args.data_name, seed=args.seed, max_turn=args.max_turn,
-                       cand_len_size=args.cand_len_size, attr_num=args.attr_num, mode='train', command=args.command, ask_num=args.ask_num, entropy_way=args.entropy_method, fm_epoch=args.fm_epoch)
+                       cand_len_size=args.cand_len_size, attr_num=args.attr_num, mode='train', command=args.command, ask_num=args.ask_num, entropy_way=args.entropy_method, fm_epoch=args.fm_epoch, method=args.method, hyper=args.hyper)
     set_random_seed(args.seed)
     state_space = env.state_space
     action_space = env.action_space
@@ -163,7 +167,7 @@ def train(args, kg, dataset, filename):
     #agent load policy parameters
     if args.load_rl_epoch != 0 :
         print('Staring loading rl model in epoch {}'.format(args.load_rl_epoch))
-        agent.load_model(data_name=args.data_name, filename=filename, epoch_user=args.load_rl_epoch)
+        agent.load_model(data_name=args.data_name, filename=filename, epoch_user=args.load_rl_epoch, hyper=args.hyper, method=args.method)
     for i_episode in range(args.load_rl_epoch+1, args.epochs++1): #args.epochs
         blockPrint()  # Block user-agent process output
         print('\n================new tuple:{}===================='.format(i_episode))
@@ -203,29 +207,77 @@ def train(args, kg, dataset, filename):
             print('loss : {} in episode {}'.format(loss.item()/args.observe_num, i_episode))
             if i_episode % (args.observe_num * 2) == 0 and i_episode > 0:
                 print('save model in episode {}'.format(i_episode))
-                save_rl_model_log(dataset=args.data_name, filename=filename, epoch=i_episode, epoch_loss=loss.item()/args.observe_num, train_len=args.observe_num)
+                save_rl_model_log(dataset=args.data_name, filename=filename, epoch=i_episode, epoch_loss=loss.item()/args.observe_num, train_len=args.observe_num, hyper=args.hyper, method=args.method)
                 SR = [SR5/args.observe_num, SR10/args.observe_num, SR15/args.observe_num, AvgT/args.observe_num]
-                save_rl_mtric(dataset=args.data_name, filename=filename, epoch=i_episode, SR=SR, spend_time=time.time()-tt)  #save RL metric
+                save_rl_mtric(dataset=args.data_name, filename=filename, epoch=i_episode, SR=SR, spend_time=time.time()-tt, hyper=args.hyper, method=args.method)  #save RL metric
 
             if i_episode % (args.observe_num * 4) == 0 and i_episode > 0:
-                agent.save_model(data_name=args.data_name, filename=filename, epoch_user=i_episode) # save RL policy model
+                agent.save_model(data_name=args.data_name, filename=filename, epoch_user=i_episode, hyper=args.hyper, method = args.method) # save RL policy model
             print('SR5:{}, SR10:{}, SR15:{}, AvgT:{} Total epoch_uesr:{}'.format(SR5/args.observe_num, SR10/args.observe_num, SR15/args.observe_num, AvgT/args.observe_num, i_episode+1))
             print('spend time: {}'.format(time.time()-start))
             SR5, SR10, SR15, AvgT = 0, 0, 0, 0
             loss = torch.tensor(0, dtype=torch.float, device=args.device)
             tt = time.time()
 
-        if i_episode % (args.observe_num * 4) == 0 and i_episode > 0:
-            print('Evaluating on Test tuples!')
+        # if i_episode % (args.observe_num * 4) == 0 and i_episode > 0:
+        #     print('Evaluating on Test tuples!')
             # dqn_evaluate(args, kg, dataset, agent, filename, i_episode)
 
+def eval(args, kg, dataset, filename):
+    list1 = [
+        ['none', 666, 8000],
+    ]
+    for i in range(len(list1)):
+        args.method = list1[i][0]
+        args.hyper = list1[i][1]
+        args.observe_num = 1000
+        env = EnvDict[args.data_name](kg, dataset, args.data_name, seed=args.seed, max_turn=args.max_turn,
+                           cand_len_size=args.cand_len_size, attr_num=args.attr_num, mode='test', command=args.command, ask_num=args.ask_num, entropy_way=args.entropy_method, fm_epoch=args.fm_epoch, hyper=args.hyper, method=args.method)
+        set_random_seed(args.seed)
+        state_space = env.state_space
+        action_space = env.action_space
+        memory = ReplayMemory(args.memory_size)
+        agent = Agent(device=args.device, memory=memory, state_space=state_space, hidden_size=args.hidden,
+                      action_space=action_space)
+        cnt = list1[i][2]
+        dqn_evaluate(args, kg, dataset, agent, filename, cnt)
+        # while cnt < 50000:
+        #     dqn_evaluate(args, kg, dataset, agent, filename, cnt)
+        #     cnt += 2000
+
+def valid(args, kg, dataset, filename):
+    list1 = [
+            ['cos', 0.1, 4000], ['cos', 0.2, 4000], ['cos', 0.3, 4000], ['cos', 0.4, 4000],
+            ['cos', 0.5, 4000], ['cos', 0.6, 4000], ['cos', 0.7, 4000],
+            ['jaccard', 0.1, 4000], ['jaccard', 0.2, 4000], ['jaccard', 0.3, 4000], ['jaccard', 0.4, 4000],
+            ['jaccard', 0.5, 4000], ['jaccard', 0.6, 4000], ['jaccard', 0.7, 4000], ['jaccard', 0.8, 4000],
+            ['pearson', 0.1, 4000], ['pearson', 0.2, 4000], ['pearson', 0.3, 4000], ['pearson', 0.4, 4000],
+            ['pearson', 0.5, 4000], ['pearson', 0.6, 4000], ['pearson', 0.7, 4000], ['pearson', 0.8, 4000],
+            ['pearson', 0.9, 4000],
+    ]
+
+    for i in range(len(list1)):
+        args.method = list1[i][0]
+        args.hyper = list1[i][1]
+        env = EnvDict[args.data_name](kg, dataset, args.data_name, seed=args.seed, max_turn=args.max_turn,
+                           cand_len_size=args.cand_len_size, attr_num=args.attr_num, mode='valid', command=args.command, ask_num=args.ask_num, entropy_way=args.entropy_method, fm_epoch=args.fm_epoch, hyper=args.hyper, method=args.method)
+        set_random_seed(args.seed)
+        state_space = env.state_space
+        action_space = env.action_space
+        memory = ReplayMemory(args.memory_size)
+        agent = Agent(device=args.device, memory=memory, state_space=state_space, hidden_size=args.hidden,
+                      action_space=action_space)
+        cnt = list1[i][2]
+        while cnt < 50000:
+            dqn_valid(args, kg, dataset, agent, filename, cnt)
+            cnt += 4000
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--seed', '-seed', type=int, default=1, help='random seed.')
-    parser.add_argument('--gpu', type=str, default='0', help='gpu device.')
+    parser.add_argument('--gpu', type=str, default='6', help='gpu device.')
     parser.add_argument('--epochs', '-me', type=int, default=50000, help='the number of RL train epoch')
-    parser.add_argument('--fm_epoch', type=int, default=245, help='the epoch of FM embedding')
+    parser.add_argument('--fm_epoch', type=int, default=250, help='the epoch of FM embedding')
     parser.add_argument('--batch_size', type=int, default=128, help='batch size.')
     parser.add_argument('--gamma', type=float, default=0.999, help='reward discount factor.')
     parser.add_argument('--target_update', type=int, default=20, help='the number of epochs to update policy parameters')
@@ -233,7 +285,7 @@ def main():
     parser.add_argument('--hidden', type=int, default=512, help='number of samples')
     parser.add_argument('--memory_size', type=int, default=50000, help='size of memory ')
 
-    parser.add_argument('--data_name', type=str, default=LAST_FM, choices=[LAST_FM, LAST_FM_STAR, YELP, YELP_STAR],
+    parser.add_argument('--data_name', type=str, default=YELP, choices=[LAST_FM, LAST_FM_STAR, YELP, YELP_STAR],
                         help='One of {LAST_FM, LAST_FM_STAR, YELP, YELP_STAR}.')
     parser.add_argument('--entropy_method', type=str, default='entropy', help='entropy_method is one of {entropy, weight entropy}')
     # Although the performance of 'weighted entropy' is better, 'entropy' is an alternative method considering the time cost.
@@ -244,7 +296,9 @@ def main():
     parser.add_argument('--command', type=int, default=7, help='select state vector')
     parser.add_argument('--ask_num', type=int, default=1, help='the number of features asked in a turn')
     parser.add_argument('--observe_num', type=int, default=1000, help='the number of epochs to save RL model and metric')
-    parser.add_argument('--load_rl_epoch', type=int, default=32000, help='the epoch of loading RL model')
+    parser.add_argument('--load_rl_epoch', type=int, default=0, help='the epoch of loading RL model')
+    parser.add_argument('--hyper', type=float, default=666, help='xxxxx')
+    parser.add_argument('--method', type=str, default='none', choices=['jaccard', 'cos', 'pearson', 'none'],)
 
     '''
     # conver_his: Conversation_history;   attr_ent: Entropy of attribute ; cand_len: the length of candidate item set 
@@ -270,21 +324,25 @@ def main():
     args.attr_num = feature_length  # set attr_num  = feature_length
     print('args.attr_num:', args.attr_num)
     print('args.entropy_method:', args.entropy_method)
-
+    print('args.method:', args.method)
+    print('args.hyper:', args.hyper)
     dataset = load_dataset(args.data_name)
     filename = 'train-data-{}-RL-command-{}-ask_method-{}-attr_num-{}-ob-{}'.format(
         args.data_name, args.command, args.entropy_method, args.attr_num, args.observe_num)
-    env = EnvDict[args.data_name](kg, dataset, args.data_name, seed=args.seed, max_turn=args.max_turn,
-                       cand_len_size=args.cand_len_size, attr_num=args.attr_num, mode='train', command=args.command, ask_num=args.ask_num, entropy_way=args.entropy_method, fm_epoch=args.fm_epoch)
-    set_random_seed(args.seed)
-    state_space = env.state_space
-    action_space = env.action_space
-    memory = ReplayMemory(args.memory_size)
-    agent = Agent(device=args.device, memory=memory, state_space=state_space, hidden_size=args.hidden,
-                  action_space=action_space)
-    agent.load_model(data_name=args.data_name, filename=filename, epoch_user=args.load_rl_epoch)
-    dqn_evaluate(args, kg, dataset, agent, filename, 48006)
+
+    # valid(args, kg, dataset, filename)
+    eval(args, kg, dataset, filename)
     # train(args, kg, dataset, filename)
+    # list1 = [
+    #     ['none', 101], ['jaccard', 0.2]
+    # ]
+    # for i in range(len(list1)):
+    #     args.method = list1[i][0]
+    #     args.hyper = list1[i][1]
+    #     print('args.method:', args.method)
+    #     print('args.hyper:', args.hyper)
+    #     train(args, kg, dataset, filename)
 
 if __name__ == '__main__':
     main()
+
